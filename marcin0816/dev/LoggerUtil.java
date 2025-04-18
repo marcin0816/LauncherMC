@@ -4,12 +4,10 @@ import java.io.IOException;
 import java.util.logging.*;
 
 public class LoggerUtil {
-
     private static volatile Logger logger;
 
-    private LoggerUtil() {
-        // Konstruktor prywatny, aby zapobiec tworzeniu instancji klasy
-    }
+    // Private constructor to prevent instantiation
+    private LoggerUtil() {}
 
     public static Logger getLogger() {
         if (logger == null) {
@@ -24,28 +22,30 @@ public class LoggerUtil {
     }
 
     private static void setupLogger() {
+        // Set logging level
         logger.setLevel(Level.ALL);
 
-        // Ustaw format logów
+        // Create a formatter for log messages
         SimpleFormatter formatter = new SimpleFormatter();
 
-        // Dodaj Handler do logowania na konsolę
+        // Add Console Handler
         ConsoleHandler consoleHandler = new ConsoleHandler();
         consoleHandler.setLevel(Level.ALL);
         consoleHandler.setFormatter(formatter);
         logger.addHandler(consoleHandler);
 
-        // Dodaj Handler do logowania do pliku
+        // Add File Handler for logging
         try {
-            FileHandler fileHandler = new FileHandler("minecraft_launcher.log", true); // `true` dołącz do istniejącego pliku
+            // 'true' parameter means append to existing log file
+            FileHandler fileHandler = new FileHandler("minecraft_launcher.log", true);
             fileHandler.setLevel(Level.ALL);
             fileHandler.setFormatter(formatter);
             logger.addHandler(fileHandler);
         } catch (IOException e) {
-            System.err.println("Nie udało się utworzyć pliku logów: " + e.getMessage());
+            System.err.println("Failed to create log file: " + e.getMessage());
         }
 
-        // Wyłącz domyślny Handler, aby zapobiec powieleniu logów
+        // Disable parent handlers to prevent duplicate logging
         logger.setUseParentHandlers(false);
     }
 }

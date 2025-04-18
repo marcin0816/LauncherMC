@@ -1,14 +1,19 @@
 package marcin0816.dev;
 
 import javax.swing.*;
+import javax.swing.filechooser.FileNameExtensionFilter;
 import java.awt.*;
 import java.awt.event.ItemEvent;
 import java.io.*;
 import java.net.HttpURLConnection;
 import java.net.URI;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 import org.json.JSONArray;
@@ -19,7 +24,9 @@ public class MinecraftLauncher extends JFrame {
     @Serial
     private static final long serialVersionUID = 1L;
     private static final String VERSIONS_URL = "https://piston-meta.mojang.com/mc/game/version_manifest.json";
-    private static final Logger LOGGER = Logger.getLogger(MinecraftLauncher.class.getName());
+    private static final Logger LOGGER = LoggerUtil.getLogger();
+    private static final String LAUNCHER_DIR = "C:\\MCLauncher";
+
     private final JButton actionButton;
     private final JTextField usernameField;
     private final JList<String> versionList;
@@ -29,138 +36,149 @@ public class MinecraftLauncher extends JFrame {
     private final JCheckBox customJavaPathCheckbox;
     private final JTextField customJavaPathField;
 
+    // New memory-related variables
+    private JSlider memorySlider;
+    private JLabel memoryLabel;
+    private int memoryAllocation = 2048; // Default to 2GB
+
     public MinecraftLauncher() {
-        setTitle("Minecraft Non-Premium Launcher");
+        setTitle(LanguageSettings.getMessage("launcher_title"));
         setSize(800, 600);
         setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
         setLocationRelativeTo(null);
         setLayout(new BorderLayout());
 
-        JPanel panel = new JPanel();
-        panel.setLayout(new GridLayout(0, 1));
+        JPanel panel = new JPanel(new GridLayout(0, 1));
 
-        // Wybór języka
         panel.add(new JLabel(LanguageSettings.getMessage("language_label")));
-        JComboBox<LanguageSettings.Language> languageComboBox = getLanguageJComboBox();
-        panel.add(languageComboBox);
+        panel.add(getLanguageJComboBox());
 
-        // Pole nazwy użytkownika
         panel.add(new JLabel(LanguageSettings.getMessage("username_label")));
         usernameField = new JTextField();
         panel.add(usernameField);
 
-        // Lista wyboru wersji
         panel.add(new JLabel(LanguageSettings.getMessage("version_label")));
         versionListModel = new DefaultListModel<>();
         versionList = new JList<>(versionListModel);
         versionList.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
-        versionList.addListSelectionListener(_ -> updateActionButton());
+        versionList.addListSelectionListener(_e -> updateActionButton());
+        JScrollPane scroll = new JScrollPane(versionList);
+        scroll.setPreferredSize(new Dimension(200, 100));
+        panel.add(scroll);
 
-        JScrollPane versionScrollPane = new JScrollPane(versionList);
-        versionScrollPane.setPreferredSize(new Dimension(200, 100));
-        panel.add(versionScrollPane);
-
-        // Checkbox i pole dla własnej ścieżki Java
         customJavaPathCheckbox = new JCheckBox(LanguageSettings.getMessage("custom_java_path"));
-        customJavaPathCheckbox.addActionListener(_ -> updateJavaPathFieldState());
+        customJavaPathCheckbox.addActionListener(_e -> updateJavaPathFieldState());
         panel.add(customJavaPathCheckbox);
 
         panel.add(new JLabel(LanguageSettings.getMessage("java_path_label")));
-        customJavaPathField = new JTextField(System.getProperty("java.home") + "/bin/java");
+        customJavaPathField = new JTextField(System.getProperty("java.home") + File.separator + "bin" + File.separator + "java");
         customJavaPathField.setEnabled(false);
         panel.add(customJavaPathField);
 
-        // Przycisk akcji (pobierz lub uruchom)
+        // Add memory allocation panel
+        panel.add(createMemoryPanel());
+
         actionButton = new JButton(LanguageSettings.getMessage("download_version_button"));
         actionButton.setEnabled(false);
-        actionButton.addActionListener(_ -> {
-            String selectedVersion = versionList.getSelectedValue();
-            if (selectedVersion != null && !selectedVersion.isEmpty()) {
-                if (actionButton.getText().equals(LanguageSettings.getMessage("download_version_button"))) {
-                    new Thread(() -> downloadSelectedVersion(selectedVersion)).start();
-                } else if (actionButton.getText().equals(LanguageSettings.getMessage("run_game_button"))) {
-                    String username = usernameField.getText();
-                    if (!username.isEmpty()) {
-                        new Thread(() -> launchGame(username)).start();
-                    } else {
-                        JOptionPane.showMessageDialog(null, LanguageSettings.getMessage("error_no_username"), "Błąd", JOptionPane.ERROR_MESSAGE);
+        actionButton.addActionListener(_e -> {
+            if (actionButton.getText().equals(LanguageSettings.getMessage("download_version_button"))) {
+                new Thread(() -> {
+                    String version = versionList.getSelectedValue();
+                    if (version != null && !version.isEmpty()) {
+                        downloadSelectedVersion(version);
                     }
-                }
+                }).start();
+            } else {
+                new Thread(() -> {
+                    String user = usernameField.getText().trim();
+                    if (!user.isEmpty()) {
+                        launchGame(user);
+                    } else {
+                        SwingUtilities.invokeLater(() -> JOptionPane.showMessageDialog(
+                                null,
+                                LanguageSettings.getMessage("error_no_username"),
+                                "Błąd",
+                                JOptionPane.ERROR_MESSAGE));
+                    }
+                }).start();
             }
         });
 
-        // Dodanie komponentów do ramki
         add(panel, BorderLayout.CENTER);
         add(actionButton, BorderLayout.SOUTH);
 
-        // Pasek postępu
         progressBar = new JProgressBar();
         progressBar.setStringPainted(true);
         add(progressBar, BorderLayout.NORTH);
 
-        // Załadowanie dostępnych wersji Minecrafta
         loadAvailableVersions();
+    }
+    // Create memory panel with slider
+    private JPanel createMemoryPanel() {
+        JPanel memoryPanel = new JPanel(new BorderLayout());
+        memoryPanel.add(new JLabel(LanguageSettings.getMessage("memory_allocation_label")), BorderLayout.WEST);
+
+        // Create slider with range from 1GB to 8GB, default to 2GB
+        memorySlider = new JSlider(JSlider.HORIZONTAL, 1024, 8192, memoryAllocation);
+        memorySlider.setMajorTickSpacing(1024);
+        memorySlider.setPaintTicks(true);
+        memorySlider.setSnapToTicks(true);
+
+        // Update the memory allocation when slider changes
+        memorySlider.addChangeListener(e -> {
+            memoryAllocation = memorySlider.getValue();
+            updateMemoryLabel();
+        });
+
+        memoryPanel.add(memorySlider, BorderLayout.CENTER);
+
+        // Add label to show current memory value
+        memoryLabel = new JLabel(memoryAllocation / 1024 + " GB");
+        memoryPanel.add(memoryLabel, BorderLayout.EAST);
+
+        return memoryPanel;
+    }
+
+    // Method to update the memory label
+    private void updateMemoryLabel() {
+        memoryLabel.setText(memoryAllocation / 1024 + " GB");
     }
 
     private JComboBox<LanguageSettings.Language> getLanguageJComboBox() {
-        LanguageSettings.Language[] languages = {LanguageSettings.Language.ENGLISH, LanguageSettings.Language.POLISH};
-        final JComboBox<LanguageSettings.Language> languageComboBox = new JComboBox<>(languages);
-        languageComboBox.setSelectedItem(LanguageSettings.getCurrentLanguageEnum());
-        languageComboBox.addItemListener(e -> {
+        LanguageSettings.Language[] langs = {LanguageSettings.Language.ENGLISH, LanguageSettings.Language.POLISH};
+        JComboBox<LanguageSettings.Language> combo = new JComboBox<>(langs);
+        combo.setSelectedItem(LanguageSettings.getCurrentLanguageEnum());
+        combo.addItemListener(e -> {
             if (e.getStateChange() == ItemEvent.SELECTED) {
-                LanguageSettings.Language selectedLanguage = (LanguageSettings.Language) e.getItem();
-                LanguageSettings.setLanguage(selectedLanguage);
+                LanguageSettings.setLanguage((LanguageSettings.Language) e.getItem());
                 refreshUI();
             }
         });
-        return languageComboBox;
+        return combo;
     }
 
     private void refreshUI() {
         setTitle(LanguageSettings.getMessage("launcher_title"));
-        ((JLabel) ((JPanel) getContentPane().getComponent(0)).getComponent(0)).setText(LanguageSettings.getMessage("language_label"));
-        ((JLabel) ((JPanel) getContentPane().getComponent(0)).getComponent(2)).setText(LanguageSettings.getMessage("username_label"));
-        ((JLabel) ((JPanel) getContentPane().getComponent(0)).getComponent(4)).setText(LanguageSettings.getMessage("version_label"));
+        JPanel p = (JPanel) getContentPane().getComponent(0);
+        ((JLabel) p.getComponent(0)).setText(LanguageSettings.getMessage("language_label"));
+        ((JLabel) p.getComponent(2)).setText(LanguageSettings.getMessage("username_label"));
+        ((JLabel) p.getComponent(4)).setText(LanguageSettings.getMessage("version_label"));
         customJavaPathCheckbox.setText(LanguageSettings.getMessage("custom_java_path"));
-        ((JLabel) ((JPanel) getContentPane().getComponent(0)).getComponent(7)).setText(LanguageSettings.getMessage("java_path_label"));
+        ((JLabel) p.getComponent(7)).setText(LanguageSettings.getMessage("java_path_label"));
+        ((JLabel) p.getComponent(9)).setText(LanguageSettings.getMessage("memory_allocation_label"));
         updateActionButton();
     }
 
     private void updateActionButton() {
-        String selectedVersion = versionList.getSelectedValue();
-        if (selectedVersion != null && !selectedVersion.isEmpty()) {
-            String userHome = System.getProperty("user.home");
-            Path versionPath = Paths.get(userHome, "AppData", "Roaming", ".minecraft", "versions", selectedVersion);
-
-            File versionDir = versionPath.toFile();
-            if (versionDir.exists() && versionDir.isDirectory()) {
-                actionButton.setText(LanguageSettings.getMessage("run_game_button"));
-            } else {
-                actionButton.setText(LanguageSettings.getMessage("download_version_button"));
-            }
+        String version = versionList.getSelectedValue();
+        if (version != null && !version.isEmpty()) {
+            Path verPath = Paths.get(LAUNCHER_DIR, "versions", version);
+            actionButton.setText(verPath.toFile().exists()
+                    ? LanguageSettings.getMessage("run_game_button")
+                    : LanguageSettings.getMessage("download_version_button"));
             actionButton.setEnabled(true);
         } else {
             actionButton.setEnabled(false);
-        }
-    }
-
-    private void loadAvailableVersions() {
-        try {
-            String jsonResponse = downloadJson(VERSIONS_URL);
-            JSONObject jsonObject = new JSONObject(jsonResponse);
-            versionsArray = jsonObject.getJSONArray("versions");
-
-            for (int i = 0; i < versionsArray.length(); i++) {
-                JSONObject version = versionsArray.getJSONObject(i);
-                String versionId = version.getString("id");
-                String versionType = version.getString("type");
-
-                if (versionType.equals("release")) { // Dodaj tylko stabilne wersje
-                    versionListModel.addElement(versionId);
-                }
-            }
-        } catch (IOException e) {
-            LOGGER.log(Level.SEVERE, LanguageSettings.getMessage("error_missing_jar") + e.getMessage(), e);
         }
     }
 
@@ -169,298 +187,364 @@ public class MinecraftLauncher extends JFrame {
             customJavaPathField.setEnabled(true);
         } else {
             customJavaPathField.setEnabled(false);
-            customJavaPathField.setText(System.getProperty("java.home") + "/bin/java");
+            customJavaPathField.setText(System.getProperty("java.home")
+                    + File.separator + "bin" + File.separator + "java");
         }
     }
 
+    private void loadAvailableVersions() {
+        try {
+            String json = downloadJson(VERSIONS_URL);
+            JSONObject root = new JSONObject(json);
+            versionsArray = root.getJSONArray("versions");
+            for (int i = 0; i < versionsArray.length(); i++) {
+                JSONObject v = versionsArray.getJSONObject(i);
+                if ("release".equals(v.getString("type"))) {
+                    versionListModel.addElement(v.getString("id"));
+                }
+            }
+        } catch (IOException e) {
+            LOGGER.log(Level.SEVERE,
+                    LanguageSettings.getMessage("error_missing_jar") + e.getMessage(), e);
+        }
+    }
+
+    // Pobierz JSON z podanego URL
+    private String downloadJson(String urlString) throws IOException {
+        HttpURLConnection conn = (HttpURLConnection) URI.create(urlString).toURL().openConnection();
+        conn.setRequestMethod("GET");
+        conn.connect();
+        if (conn.getResponseCode() != HttpURLConnection.HTTP_OK) {
+            throw new IOException("HTTP " + conn.getResponseCode());
+        }
+        try (BufferedReader reader = new BufferedReader(new InputStreamReader(conn.getInputStream()))) {
+            StringBuilder sb = new StringBuilder();
+            String line;
+            while ((line = reader.readLine()) != null) {
+                sb.append(line);
+            }
+            return sb.toString();
+        }
+    }
+
+    // Pobierz i zapisz wybraną wersję Minecrafta
     private void downloadSelectedVersion(String versionId) {
         try {
             progressBar.setValue(0);
             progressBar.setString(LanguageSettings.getMessage("download_version_progress"));
-
-            JSONObject selectedVersion = null;
+            JSONObject selected = null;
             for (int i = 0; i < versionsArray.length(); i++) {
-                JSONObject version = versionsArray.getJSONObject(i);
-                if (version.getString("id").equals(versionId)) {
-                    selectedVersion = version;
+                if (versionsArray.getJSONObject(i).getString("id").equals(versionId)) {
+                    selected = versionsArray.getJSONObject(i);
                     break;
                 }
             }
-
-            if (selectedVersion != null) {
-                String versionUrl = selectedVersion.getString("url");
-                LOGGER.log(Level.INFO, "Pobieranie informacji o wersji z: " + versionUrl);
-                JSONObject versionInfo = new JSONObject(downloadJson(versionUrl));
-
-                // Zapisz plik wersji do katalogu index
-                String userHome = System.getProperty("user.home");
-                String indexDirPath = Paths.get(userHome, "AppData", "Roaming", ".minecraft", "assets", "indexes").toString();
-                createParentDirectories(indexDirPath); // Tworzenie katalogu 'indexes'
-
-                String versionJsonPath = Paths.get(indexDirPath, versionId + ".json").toString();
-                createParentDirectories(Paths.get(versionJsonPath).getParent().toString()); // Tworzenie folderu nadrzędnego dla JSON
-
-                try (FileWriter writer = new FileWriter(versionJsonPath)) {
-                    writer.write(versionInfo.toString(4));
-                }
-
-                String clientUrl = versionInfo.getJSONObject("downloads").getJSONObject("client").getString("url");
-                String jarFilePath = Paths.get(userHome, "AppData", "Roaming", ".minecraft", "versions", versionId, versionId + ".jar").toString();
-                createParentDirectories(Paths.get(jarFilePath).getParent().toString());
-                downloadJar(clientUrl, jarFilePath);
-                LOGGER.log(Level.INFO, "Pobrano wersję: " + versionId);
-
-                progressBar.setValue(50);
-                progressBar.setString(LanguageSettings.getMessage("download_version_progress"));
-
-                downloadLibraries(versionInfo);
-                progressBar.setValue(75);
-
-                LOGGER.log(Level.INFO, "Pobieranie assetów...");
-                downloadAssets(versionInfo);
-                progressBar.setValue(100);
-                progressBar.setString(LanguageSettings.getMessage("download_version_progress") + " zakończone");
-
-                updateActionButton();
-            }
+            if (selected == null) return;
+            JSONObject info = new JSONObject(downloadJson(selected.getString("url")));
+            // klient
+            Path verDir = Paths.get(LAUNCHER_DIR, "versions", versionId);
+            Files.createDirectories(verDir);
+            Path jarPath = verDir.resolve(versionId + ".jar");
+            String clientUrl = info.getJSONObject("downloads").getJSONObject("client").getString("url");
+            downloadJar(clientUrl, jarPath.toString());
+            progressBar.setValue(50);
+            // biblioteki
+            downloadLibraries(info);
+            progressBar.setValue(75);
+            // assety
+            downloadAssets(info);
+            progressBar.setValue(100);
+            progressBar.setString(LanguageSettings.getMessage("download_version_progress") + " zakończone");
+            updateActionButton();
         } catch (IOException e) {
-            LOGGER.log(Level.SEVERE, "Wystąpił błąd podczas pobierania wersji: " + versionId, e);
+            LOGGER.log(Level.SEVERE, "Błąd pobierania wersji: " + versionId, e);
         }
     }
 
-    private void downloadAssets(JSONObject versionInfo) throws IOException {
-        JSONObject assetIndex = versionInfo.getJSONObject("assetIndex");
-        String assetJsonUrl = assetIndex.getString("url");
-
-        LOGGER.info("Pobieranie indeksu assetów z: " + assetJsonUrl);
-
-        String userHome = System.getProperty("user.home");
-        String baseAssetDir = Paths.get(userHome, "AppData", "Roaming", ".minecraft", "assets").toString();
-        String indexesDir = Paths.get(baseAssetDir, "indexes").toString();
-        createParentDirectories(indexesDir);
-
-        Path indexPath = Paths.get(indexesDir, assetIndex.getString("id") + ".json");
-        if (!Files.exists(indexPath)) {
-            downloadJar(assetJsonUrl, indexPath.toString());
-            LOGGER.info("Zapisano indeks assetów w: " + indexPath);
-        } else {
-            LOGGER.info("Indeks assetów już istnieje: " + indexPath);
-        }
-
-        JSONObject assetJson = new JSONObject(new String(Files.readAllBytes(indexPath)));
-        JSONObject objects = assetJson.getJSONObject("objects");
-
-        for (String assetKey : objects.keySet()) {
-            JSONObject assetObj = objects.getJSONObject(assetKey);
-            String hash = assetObj.getString("hash");
-            String assetDownloadUrl = "https://resources.download.minecraft.net/" + hash.substring(0, 2) + "/" + hash;
-
-            Path targetPath = Paths.get(baseAssetDir, assetKey);
-            createParentDirectories(targetPath.getParent().toString());
-
-            if (!Files.exists(targetPath)) {
-                LOGGER.info("Pobieranie assetu: " + assetKey + " z " + assetDownloadUrl);
-                downloadJar(assetDownloadUrl, targetPath.toString());
-                LOGGER.info("Zapisano asset w: " + targetPath);
-            } else {
-                LOGGER.info("Asset już istnieje: " + targetPath);
+    // Metoda pobierająca plik .jar pod podanym URL
+    private void downloadJar(String urlString, String savePath) throws IOException {
+        HttpURLConnection conn = (HttpURLConnection) URI.create(urlString).toURL().openConnection();
+        conn.setRequestMethod("GET");
+        try (InputStream in = conn.getInputStream(); FileOutputStream out = new FileOutputStream(savePath)) {
+            byte[] buffer = new byte[4096]; int bytesRead;
+            while ((bytesRead = in.read(buffer)) != -1) {
+                out.write(buffer, 0, bytesRead);
             }
         }
     }
 
-    private void downloadLibraries(JSONObject versionInfo) throws IOException {
-        JSONArray libraries = versionInfo.getJSONArray("libraries");
-
-        for (int i = 0; i < libraries.length(); i++) {
-            JSONObject library = libraries.getJSONObject(i);
-            if (library.has("downloads") && library.getJSONObject("downloads").has("artifact")) {
-                JSONObject artifact = library.getJSONObject("downloads").getJSONObject("artifact");
-                String libraryUrl = artifact.getString("url");
-                String userHome = System.getProperty("user.home");
-                String libraryPath = Paths.get(userHome, "AppData", "Roaming", ".minecraft", "libraries", artifact.getString("path")).toString();
-
-                createParentDirectories(Paths.get(libraryPath).getParent().toString());
-
-                File libraryFile = new File(libraryPath);
-                if (!libraryFile.exists()) {
-                    HttpURLConnection connection = (HttpURLConnection) URI.create(libraryUrl).toURL().openConnection();
-                    connection.setRequestMethod("GET");
-                    connection.setConnectTimeout(10000);
-                    connection.setReadTimeout(10000);
-                    int responseCode = connection.getResponseCode();
-                    if (responseCode == HttpURLConnection.HTTP_OK) {
-                        try (InputStream in = connection.getInputStream();
-                             FileOutputStream fileOutputStream = new FileOutputStream(libraryPath)) {
-                            byte[] dataBuffer = new byte[8192];
-                            int bytesRead;
-                            while ((bytesRead = in.read(dataBuffer)) != -1) {
-                                fileOutputStream.write(dataBuffer, 0, bytesRead);
-                            }
-                        }
-                        LOGGER.log(Level.INFO, "Pobrano bibliotekę: " + libraryPath);
-                    } else {
-                        LOGGER.log(Level.SEVERE, "Błąd podczas pobierania biblioteki: " + libraryUrl + ", kod odpowiedzi: " + responseCode);
-                    }
-                } else {
-                    LOGGER.log(Level.INFO, "Biblioteka już istnieje: " + libraryPath);
-                }
+    // Pobieranie bibliotek z JSON-a wersji
+    private void downloadLibraries(JSONObject info) throws IOException {
+        JSONArray libs = info.getJSONArray("libraries");
+        for (int i = 0; i < libs.length(); i++) {
+            JSONObject lib = libs.getJSONObject(i);
+            if (lib.has("downloads") && lib.getJSONObject("downloads").has("artifact")) {
+                JSONObject art = lib.getJSONObject("downloads").getJSONObject("artifact");
+                String url = art.getString("url");
+                Path libPath = Paths.get(LAUNCHER_DIR, "libraries", art.getString("path"));
+                Files.createDirectories(libPath.getParent());
+                if (!Files.exists(libPath)) downloadJar(url, libPath.toString());
             }
         }
     }
 
-    private void createParentDirectories(String filePath) {
-        File parentDir = new File(filePath);
-        if (!parentDir.exists()) {
-            boolean dirsCreated = parentDir.mkdirs();
-            if (dirsCreated) {
-                LOGGER.log(Level.INFO, "Utworzono brakujące foldery dla: " + filePath);
-            } else {
-                LOGGER.log(Level.WARNING, "Nie udało się utworzyć folderów dla: " + filePath);
-            }
+    // Pobieranie assetów
+    private void downloadAssets(JSONObject info) throws IOException {
+        JSONObject assetIndex = info.getJSONObject("assetIndex");
+        String idxUrl = assetIndex.getString("url");
+        Path idxDir = Paths.get(LAUNCHER_DIR, "assets", "indexes");
+        Files.createDirectories(idxDir);
+        Path idxPath = idxDir.resolve(assetIndex.getString("id") + ".json");
+        if (!Files.exists(idxPath)) downloadJar(idxUrl, idxPath.toString());
+        JSONObject assetsJson = new JSONObject(Files.readString(idxPath, StandardCharsets.UTF_8));
+        JSONObject objects = assetsJson.getJSONObject("objects");
+        for (String key : objects.keySet()) {
+            JSONObject obj = objects.getJSONObject(key);
+            String hash = obj.getString("hash");
+            String url = "https://resources.download.minecraft.net/" + hash.substring(0, 2) + "/" + hash;
+            Path target = Paths.get(LAUNCHER_DIR, "assets", key);
+            Files.createDirectories(target.getParent());
+            if (!Files.exists(target)) downloadJar(url, target.toString());
         }
     }
 
-    private void downloadJar(String urlString, String saveDir) throws IOException {
-        HttpURLConnection connection = (HttpURLConnection) URI.create(urlString).toURL().openConnection();
-        connection.setRequestMethod("GET");
-        connection.setConnectTimeout(10000);
-        connection.setReadTimeout(10000);
-        int responseCode = connection.getResponseCode();
-        if (responseCode == HttpURLConnection.HTTP_OK) {
-            try (InputStream in = connection.getInputStream();
-                 FileOutputStream out = new FileOutputStream(saveDir)) {
-                byte[] buffer = new byte[4096];
-                int bytesRead;
-                while ((bytesRead = in.read(buffer)) != -1) {
-                    out.write(buffer, 0, bytesRead);
-                }
-                LOGGER.log(Level.INFO, "Pobrano plik: " + saveDir);
-            }
-        } else {
-            throw new IOException("Błąd podczas pobierania pliku: " + urlString + ", kod odpowiedzi: " + responseCode);
+    // Method to validate memory allocation before running the game
+    private boolean validateMemorySettings() {
+        // Get amount of available system memory in MB
+        long maxSystemMemory = Runtime.getRuntime().maxMemory() / (1024 * 1024);
+
+        // If user is trying to allocate more than 80% of available memory, show warning
+        if (memoryAllocation > (maxSystemMemory * 0.8)) {
+            int choice = JOptionPane.showConfirmDialog(
+                    this,
+                    LanguageSettings.getMessage("memory_warning_message"),
+                    LanguageSettings.getMessage("memory_warning_title"),
+                    JOptionPane.YES_NO_OPTION
+            );
+            return choice == JOptionPane.YES_OPTION;
         }
+        return true;
     }
 
-    private String downloadJson(String urlString) throws IOException {
-        URI uri = URI.create(urlString);
-        HttpURLConnection connection = (HttpURLConnection) uri.toURL().openConnection();
-        connection.setRequestMethod("GET");
-        connection.setConnectTimeout(10000);
-        connection.setReadTimeout(10000);
-        connection.connect();
-
-        if (connection.getResponseCode() != 200) {
-            throw new IOException("Failed to fetch data: " + connection.getResponseCode());
+    // Helper method to extract view distance value from log message
+    private int extractViewDistance(String logLine) {
+        // Example log format: "[17:05:41] [Server thread/INFO]: Changing view distance to 32, from 12"
+        String[] parts = logLine.split("to ");
+        if (parts.length >= 2) {
+            String distancePart = parts[1].split(",")[0].trim();
+            return Integer.parseInt(distancePart);
         }
-
-        try (BufferedReader reader = new BufferedReader(new InputStreamReader(connection.getInputStream()))) {
-            StringBuilder jsonBuilder = new StringBuilder();
-            String line;
-            while ((line = reader.readLine()) != null) {
-                jsonBuilder.append(line);
-            }
-            return jsonBuilder.toString();
-        }
-    }
-    private void addLibrariesToClasspath(File dir, StringBuilder classpath) {
-        File[] files = dir.listFiles();
-        if (files != null) {
-            for (File file : files) {
-                if (file.isDirectory()) {
-                    addLibrariesToClasspath(file, classpath);
-                } else if (file.getName().endsWith(".jar")) {
-                    classpath.append(file.getAbsolutePath()).append(File.pathSeparator);
-                }
-            }
-        }
+        return 0;
     }
 
     private void launchGame(String username) {
         try {
-            // Ustal ścieżkę do Javy
-            String javaPath = customJavaPathCheckbox.isSelected() ? customJavaPathField.getText() : System.getProperty("java.home") + "/bin/java";
-            String versionId = versionList.getSelectedValue();
-            String userHome = System.getProperty("user.home");
-            String gameDir = Paths.get(userHome, "AppData", "Roaming", ".minecraft").toString();
-            String versionJar = Paths.get(gameDir, "versions", versionId, versionId + ".jar").toString();
-
-            // Sprawdź, czy plik JAR istnieje
-            File jarFile = new File(versionJar);
-            if (!jarFile.exists()) {
-                JOptionPane.showMessageDialog(null, LanguageSettings.getMessage("error_missing_jar") + versionJar, "Błąd", JOptionPane.ERROR_MESSAGE);
+            // Validate memory settings before proceeding
+            if (!validateMemorySettings()) {
                 return;
             }
 
-            // Przygotuj classpath
-            File librariesDir = new File(gameDir, "libraries");
+            String javaPath;
+            if (customJavaPathCheckbox.isSelected()) {
+                javaPath = customJavaPathField.getText();
+            } else {
+                javaPath = findShortestJavaPath();
+            }
+
+            if (javaPath == null) {
+                int choice = JOptionPane.showConfirmDialog(
+                        null,
+                        "Nie można znaleźć Java automatycznie. Wybierasz ręcznie?",
+                        "Błąd Java",
+                        JOptionPane.YES_NO_OPTION
+                );
+                if (choice == JOptionPane.YES_OPTION) {
+                    javaPath = selectJavaExecutable();
+                }
+            }
+            if (javaPath == null) {
+                JOptionPane.showMessageDialog(
+                        null,
+                        LanguageSettings.getMessage("error_java_path"),
+                        "Błąd",
+                        JOptionPane.ERROR_MESSAGE
+                );
+                return;
+            }
+
+            String version = versionList.getSelectedValue();
+            Path gameDir = Paths.get(LAUNCHER_DIR);
+            Path versionJar = gameDir.resolve("versions").resolve(version).resolve(version + ".jar");
+            if (!Files.exists(versionJar)) {
+                JOptionPane.showMessageDialog(
+                        null,
+                        LanguageSettings.getMessage("error_missing_jar") + versionJar,
+                        "Błąd",
+                        JOptionPane.ERROR_MESSAGE
+                );
+                return;
+            }
+
             StringBuilder classpath = new StringBuilder();
-            addLibrariesToClasspath(librariesDir, classpath);
-            classpath.append(versionJar);
+            File libs = gameDir.resolve("libraries").toFile();
+            addLibs(libs, classpath);
+            classpath.append(File.pathSeparator).append(versionJar.toAbsolutePath());
 
-            LOGGER.log(Level.INFO, "Uruchamianie Minecrafta z następującymi argumentami:");
-            LOGGER.log(Level.INFO, "Java Path: " + javaPath);
-            LOGGER.log(Level.INFO, "Classpath: " + classpath);
-
-            // Budowanie procesu uruchomienia gry
-            ProcessBuilder processBuilder = new ProcessBuilder(
-                    javaPath,
-                    "-Xmx1024M", // Maksymalny przydział pamięci
-                    "-Xms512M",  // Minimalny przydział pamięci
-                    "-cp", classpath.toString(),
+            // Updated JVM arguments with improved memory settings
+            List<String> args = new ArrayList<>(Arrays.asList(
+                    "-Xmx" + memoryAllocation + "M",
+                    "-Xms" + (memoryAllocation / 2) + "M",
+                    "-XX:+UseG1GC",
+                    "-XX:+ParallelRefProcEnabled",
+                    "-XX:MaxGCPauseMillis=200",
+                    "-XX:+UnlockExperimentalVMOptions",
+                    "-XX:+DisableExplicitGC",
+                    "-XX:+AlwaysPreTouch",
+                    "-XX:G1NewSizePercent=30",
+                    "-XX:G1MaxNewSizePercent=40",
+                    "-XX:G1HeapRegionSize=8M",
+                    "-XX:G1ReservePercent=20",
+                    "-XX:G1HeapWastePercent=5",
+                    "-XX:G1MixedGCCountTarget=4",
+                    "-XX:InitiatingHeapOccupancyPercent=15",
+                    "-XX:G1MixedGCLiveThresholdPercent=90",
+                    "-XX:G1RSetUpdatingPauseTimePercent=5",
+                    "-XX:SurvivorRatio=32",
+                    "-XX:+PerfDisableSharedMem",
+                    "-XX:MaxTenuringThreshold=1",
+                    "-cp",
+                    classpath.toString(),
                     "net.minecraft.client.main.Main",
                     "--username", username,
-                    "--version", versionList.getSelectedValue(),
-                    "--gameDir", gameDir,
-                    "--assetsDir", gameDir + "/assets",
+                    "--version", version,
+                    "--gameDir", gameDir.toString(),
+                    "--assetsDir", gameDir.resolve("assets").toString(),
                     "--uuid", "0",
                     "--accessToken", "dummy_access_token"
-            );
+            ));
 
-            // Start procesu
-            Process process = processBuilder.start();
+            Path tmp = Files.createTempFile("minecraft_args", ".txt");
+            Files.write(tmp, args, StandardCharsets.UTF_8);
 
-            // Konsola wyjścia gry
-            JFrame consoleFrame = new JFrame("Konsola gry");
-            consoleFrame.setSize(600, 400);
-            consoleFrame.setLocationRelativeTo(null);
-            consoleFrame.setDefaultCloseOperation(JFrame.DISPOSE_ON_CLOSE);
-            JTextArea consoleOutput = new JTextArea();
-            consoleOutput.setEditable(false);
-            consoleFrame.add(new JScrollPane(consoleOutput));
-            consoleFrame.setVisible(true);
+            List<String> command = Arrays.asList(javaPath, "@" + tmp.toAbsolutePath().toString());
+            ProcessBuilder pb = new ProcessBuilder(command);
+            pb.redirectErrorStream(true);
+            Process proc = pb.start();
 
-            // Odczytywanie wyjścia procesu w osobnych wątkach
+            // Poprawiony kod konsoli - nie używamy try-with-resources aby nie zamykać readera
+            JFrame console = new JFrame("Minecraft Console");
+            console.setSize(600, 400);
+            JTextArea output = new JTextArea();
+            output.setEditable(false);
+            JScrollPane scrollPane = new JScrollPane(output);
+            console.add(scrollPane);
+
+            // Dodaj notatkę o pamięci na początku
+            output.append("NOTE: If you experience lag or crashes, try increasing memory allocation in the launcher.\n\n");
+            console.setVisible(true);
+
+            // Uruchom wątek odczytujący wyjście - NIE zamykaj readera w try-with-resources
             new Thread(() -> {
-                try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()))) {
+                try {
+                    BufferedReader reader = new BufferedReader(new InputStreamReader(proc.getInputStream()));
                     String line;
                     while ((line = reader.readLine()) != null) {
-                        consoleOutput.append(line + "\n");
+                        final String logLine = line;
+
+                        // Zapisz linię do konsoli
+                        SwingUtilities.invokeLater(() -> {
+                            output.append(logLine + "\n");
+                            // Przewiń na dół, aby zawsze pokazywać najnowsze logi
+                            output.setCaretPosition(output.getDocument().getLength());
+                        });
+
+                        // Monitoruj zmiany odległości renderowania
+                        if (logLine.contains("Changing view distance") && memoryAllocation < 4096) {
+                            try {
+                                int viewDistance = extractViewDistance(logLine);
+                                if (viewDistance > 16) {
+                                    SwingUtilities.invokeLater(() ->
+                                            JOptionPane.showMessageDialog(
+                                                    null,
+                                                    LanguageSettings.getMessage("view_distance_warning_message"),
+                                                    LanguageSettings.getMessage("view_distance_warning_title"),
+                                                    JOptionPane.WARNING_MESSAGE
+                                            )
+                                    );
+                                }
+                            } catch (Exception e) {
+                                // Ignore parsing errors
+                            }
+                        }
+
+                        // Sprawdź, czy występują błędy pamięci
+                        if (logLine.contains("OutOfMemoryError") || logLine.contains("Can't keep up! Is the server overloaded?")) {
+                            SwingUtilities.invokeLater(() -> {
+                                output.append("\nWARNING: Memory issues detected. Try increasing memory allocation in launcher settings.\n");
+                                output.setCaretPosition(output.getDocument().getLength());
+                            });
+                        }
                     }
                 } catch (IOException e) {
-                    LOGGER.log(Level.SEVERE, "Błąd podczas odczytywania wyjścia procesu.", e);
+                    LOGGER.log(Level.SEVERE, "Error reading process output", e);
+                    SwingUtilities.invokeLater(() -> {
+                        output.append("\nERROR: Could not read game output: " + e.getMessage() + "\n");
+                        output.setCaretPosition(output.getDocument().getLength());
+                    });
                 }
             }).start();
 
-            new Thread(() -> {
-                try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getErrorStream()))) {
-                    String line;
-                    while ((line = reader.readLine()) != null) {
-                        consoleOutput.append("Błąd: " + line + "\n");
-                    }
-                } catch (IOException e) {
-                    LOGGER.log(Level.SEVERE, "Błąd podczas odczytywania błędów procesu.", e);
-                }
-            }).start();
+            int exit = proc.waitFor();
+            LOGGER.log(Level.INFO, "Minecraft exited kodem: " + exit);
 
-            // Oczekiwanie na zakończenie procesu
-            process.waitFor();
-        } catch (IOException | InterruptedException e) {
-            LOGGER.log(Level.SEVERE, "Wystąpił błąd podczas uruchamiania gry.", e);
+        } catch (Exception e) {
+            LOGGER.log(Level.SEVERE, "Nieoczekiwany błąd podczas uruchamiania gry", e);
+            JOptionPane.showMessageDialog(null,
+                    "Błąd uruchamiania: " + e.getMessage(),
+                    "Błąd", JOptionPane.ERROR_MESSAGE);
         }
     }
 
+    private void addLibs(File dir, StringBuilder cp) {
+        File[] files = dir.listFiles();
+        if (files == null) return;
+        for (File f : files) {
+            if (f.isDirectory()) addLibs(f, cp);
+            else if (f.getName().endsWith(".jar")) {
+                cp.append(f.getAbsolutePath()).append(File.pathSeparator);
+            }
+        }
+    }
+
+    private String findShortestJavaPath() {
+        String full = "C:\\Program Files\\Java\\jdk-24\\bin\\java.exe";
+        String[] variants = {"java", full, full.replace("Program Files", "PROGRA~1"), "C:\\j\\bin\\java.exe"};
+        for (String p : variants) {
+            try {
+                Process pbc = new ProcessBuilder(p, "-version").start();
+                try (BufferedReader r = new BufferedReader(new InputStreamReader(pbc.getErrorStream()))) {
+                    String l;
+                    while ((l = r.readLine()) != null) {
+                        if (l.contains("version")) return p;
+                    }
+                }
+            } catch (IOException ignored) {}
+        }
+        return null;
+    }
+
+    private String selectJavaExecutable() {
+        JFileChooser chooser = new JFileChooser("C:\\Program Files\\Java");
+        chooser.setDialogTitle("Wybierz plik java.exe");
+        chooser.setFileFilter(new FileNameExtensionFilter("Java Executable", "exe"));
+        if (chooser.showOpenDialog(this) == JFileChooser.APPROVE_OPTION) {
+            return chooser.getSelectedFile().getAbsolutePath();
+        }
+        return null;
+    }
+
     public static void main(String[] args) {
-        LOGGER.log(Level.INFO, "Program uruchomiony");
+        LOGGER.log(Level.INFO, "Launcher start");
         SwingUtilities.invokeLater(() -> new MinecraftLauncher().setVisible(true));
     }
 }
